@@ -249,50 +249,42 @@ function addCrossingData(edges: AppEdge[], nodes: AppNode[]): AppEdge[] {
   })
 }
 
-const CROSS_ZONE_TRACK_GAP = 14  // px between parallel cross-zone cable bus lines
+const ROUTE_TRACK_GAP = 14  // px between parallel cable bus lines
 
-function assignCrossZoneOffsets(edges: AppEdge[], nodes: AppNode[]): AppEdge[] {
+function routeEdges(edges: AppEdge[], nodes: AppNode[]): AppEdge[] {
   const nodeById = new Map(nodes.map(n => [n.id, n]))
-  const nodeZone = new Map<string, string>()
-  nodes.forEach(n => nodeZone.set(n.id, (n.data as CanvasNodeData).space_id ?? '__no_zone__'))
 
-  // Group cross-zone edges by (sourceZone → targetZone) corridor
-  const corridorGroups = new Map<string, AppEdge[]>()
-  edges.forEach(edge => {
-    const srcZone = nodeZone.get(edge.source) ?? '__no_zone__'
-    const tgtZone = nodeZone.get(edge.target) ?? '__no_zone__'
-    if (srcZone === tgtZone) return
-    const key = `${srcZone}→${tgtZone}`
-    if (!corridorGroups.has(key)) corridorGroups.set(key, [])
-    corridorGroups.get(key)!.push(edge)
+  // Group ALL edges by source node — no zone distinction
+  const bySource = new Map<string, AppEdge[]>()
+  edges.forEach(e => {
+    if (!bySource.has(e.source)) bySource.set(e.source, [])
+    bySource.get(e.source)!.push(e)
   })
 
-  // Sort each corridor by source X (left→right) and assign explicit midY per cable
   const midYOverrides = new Map<string, number>()
-  corridorGroups.forEach(group => {
-    const sorted = [...group].sort((a, b) => {
-      const ax = nodeById.get(a.source)?.position.x ?? 0
-      const bx = nodeById.get(b.source)?.position.x ?? 0
-      return ax - bx
-    })
+  bySource.forEach((group, srcId) => {
+    const srcNode = nodeById.get(srcId)
+    if (!srcNode) return
+    const sy = srcNode.position.y + NODE_HEIGHT_EST
+    // Sort by target X for left-to-right visual consistency
+    const sorted = [...group].sort((a, b) =>
+      (nodeById.get(a.target)?.position.x ?? 0) - (nodeById.get(b.target)?.position.x ?? 0)
+    )
     sorted.forEach((edge, i) => {
-      const srcNode = nodeById.get(edge.source)
-      if (!srcNode) return
-      const sy = srcNode.position.y + NODE_HEIGHT_EST
-      midYOverrides.set(edge.id, sy + 54 + i * CROSS_ZONE_TRACK_GAP)
+      midYOverrides.set(edge.id, sy + 54 + i * ROUTE_TRACK_GAP)
     })
   })
 
   return edges.map(edge => {
-    const midYOverride = midYOverrides.get(edge.id)
-    if (midYOverride === undefined) return edge
+    const midY = midYOverrides.get(edge.id)
+    if (midY === undefined) return edge
     const edgeData = (edge.data ?? {}) as EdgeData
-    return { ...edge, data: { ...edgeData, midYOverride } }
+    return { ...edge, data: { ...edgeData, midYOverride: midY } }
   })
 }
 
 function buildEdges(edges: AppEdge[], nodes: AppNode[]): AppEdge[] {
-  return addCrossingData(assignCrossZoneOffsets(orientEdges(edges, nodes), nodes), nodes)
+  return addCrossingData(routeEdges(orientEdges(edges, nodes), nodes), nodes)
 }
 
 function minimizeCrossings(rows: AppNode[][], edges: AppEdge[]): AppNode[][] {
@@ -396,6 +388,7 @@ function buildTreeLayout(currentNodes: AppNode[], currentEdges: AppEdge[] = []):
   }
 
   const oriented = orientEdges(currentEdges, regularNodes)
+  const allNodesById = new Map(regularNodes.map(n => [n.id, n]))
   let zoneY = 40
   const laidOut = new Map<string, AppNode>()
 
@@ -516,60 +509,47 @@ function buildTreeLayout(currentNodes: AppNode[], currentEdges: AppEdge[] = []):
       const x = ZONE_X + ZONE_SIDE_PAD + cx - w / 2
       const y = zoneY + ZONE_TOP_PAD + level * NODE_Y_GAP
 
-      // Per-edge source handles: one dot per cable, spread around child's center X
-      const intraEdgesFrom = oriented.filter(e => e.source === n.id && zoneNodeIds.has(e.target))
-      const edgesByChild = new Map<string, AppEdge[]>()
-      intraEdgesFrom.forEach(e => {
-        if (!edgesByChild.has(e.target)) edgesByChild.set(e.target, [])
-        edgesByChild.get(e.target)!.push(e)
+      // Uniform handle placement for ALL edges (intra-zone and cross-zone treated identically).
+      // Handle X is derived from the target/source node's canvas center, clamped to [2,98]%.
+      const nodeCanvasCenterX = (nid: string): number => {
+        if (zoneNodeIds.has(nid)) {
+          return ZONE_X + ZONE_SIDE_PAD + (nodeCx.get(nid) ?? cx)
+        }
+        const ext = laidOut.get(nid) ?? allNodesById.get(nid)
+        const tw = (ext?.data as CanvasNodeData | undefined)?.nodeWidth ?? NODE_WIDTH
+        return (ext?.position.x ?? x) + tw / 2
+      }
+
+      const edgesFrom = oriented.filter(e => e.source === n.id)
+      const edgesByTarget = new Map<string, AppEdge[]>()
+      edgesFrom.forEach(e => {
+        if (!edgesByTarget.has(e.target)) edgesByTarget.set(e.target, [])
+        edgesByTarget.get(e.target)!.push(e)
       })
       const sourceHandles: Array<{ id: string; leftPercent: number }> = []
-      edgesByChild.forEach((childEdges, cid) => {
-        const childCx = nodeCx.get(cid) ?? cx
-        childEdges.forEach((edge, i) => {
-          const offset = (i - (childEdges.length - 1) / 2) * HANDLE_SPREAD
-          const relX = (childCx + offset) - (cx - w / 2)
-          sourceHandles.push({ id: `b-${edge.id}`, leftPercent: Math.max(2, Math.min(98, (relX / w) * 100)) })
+      edgesByTarget.forEach((targetEdges, tid) => {
+        const tCenterX = nodeCanvasCenterX(tid)
+        targetEdges.forEach((edge, i) => {
+          const offset = (i - (targetEdges.length - 1) / 2) * HANDLE_SPREAD
+          const lp = ((tCenterX + offset - x) / w) * 100
+          sourceHandles.push({ id: `b-${edge.id}`, leftPercent: Math.max(2, Math.min(98, lp)) })
         })
       })
 
-      // Per-edge target handles: one dot per cable, spread at center of this node
-      const intraEdgesTo = oriented.filter(e => e.target === n.id && zoneNodeIds.has(e.source))
-      const edgesByParent = new Map<string, AppEdge[]>()
-      intraEdgesTo.forEach(e => {
-        if (!edgesByParent.has(e.source)) edgesByParent.set(e.source, [])
-        edgesByParent.get(e.source)!.push(e)
+      const edgesTo = oriented.filter(e => e.target === n.id)
+      const edgesBySource = new Map<string, AppEdge[]>()
+      edgesTo.forEach(e => {
+        if (!edgesBySource.has(e.source)) edgesBySource.set(e.source, [])
+        edgesBySource.get(e.source)!.push(e)
       })
       const targetHandles: Array<{ id: string; leftPercent: number }> = []
-      edgesByParent.forEach(parentEdges => {
-        parentEdges.forEach((edge, i) => {
-          const offset = (i - (parentEdges.length - 1) / 2) * HANDLE_SPREAD
-          targetHandles.push({ id: `t-${edge.id}`, leftPercent: Math.max(2, Math.min(98, 50 + (offset / w) * 100)) })
+      edgesBySource.forEach((sourceEdges, sid) => {
+        const sCenterX = nodeCanvasCenterX(sid)
+        sourceEdges.forEach((edge, i) => {
+          const offset = (i - (sourceEdges.length - 1) / 2) * HANDLE_SPREAD
+          const lp = ((sCenterX + offset - x) / w) * 100
+          targetHandles.push({ id: `t-${edge.id}`, leftPercent: Math.max(2, Math.min(98, lp)) })
         })
-      })
-
-      // Cross-zone handles: placed in the LEFT margin of the node (before leaf children start)
-      // This prevents cross-zone cables from visually overlapping subtree-child nodes
-      const crossEdgesFrom = oriented.filter(e => e.source === n.id && !zoneNodeIds.has(e.target))
-      const nCF = crossEdgesFrom.length
-      const subtreeChildren = (intraChildren.get(n.id) ?? []).filter(cid => (intraChildren.get(cid) ?? []).length > 0)
-      // Left margin = [2%, leftmost subtree child's leftPercent - 5%], clamped to [2,48]
-      const subtreeLeftPct = subtreeChildren.length > 0
-        ? Math.min(...subtreeChildren.map(cid => {
-          const scx = nodeCx.get(cid) ?? cx
-          return Math.max(2, ((scx - (cx - w / 2)) / w) * 100 - 5)
-        }))
-        : 50
-      const crossZoneRight = Math.min(48, subtreeLeftPct)
-      crossEdgesFrom.forEach((edge, i) => {
-        const lp = nCF === 1 ? crossZoneRight / 2 : (i + 1) / (nCF + 1) * crossZoneRight
-        sourceHandles.push({ id: `b-${edge.id}`, leftPercent: Math.max(2, Math.min(48, lp)) })
-      })
-      const crossEdgesTo = oriented.filter(e => e.target === n.id && !zoneNodeIds.has(e.source))
-      const nCT = crossEdgesTo.length
-      crossEdgesTo.forEach((edge, i) => {
-        const lp = nCT === 1 ? crossZoneRight / 2 : (i + 1) / (nCT + 1) * crossZoneRight
-        targetHandles.push({ id: `t-${edge.id}`, leftPercent: Math.max(2, Math.min(48, lp)) })
       })
 
       laidOut.set(n.id, {
