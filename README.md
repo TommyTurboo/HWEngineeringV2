@@ -51,10 +51,10 @@ Het canvas toont alle kasten en veldcomponenten per zone als interactief bloksch
 Herbereken de automatische lay-out op basis van de elektrische hiërarchie:
 
 - **Boomstructuur per zone**: kasten worden van boven naar beneden gerangschikt op type (hoofdverdeler → onderverdeler → besturingskast → ...). Nodes krijgen een variabele breedte op basis van hun subtree.
-- **DAG → boom**: als een node meerdere intra-zone ouders heeft (DAG-structuur), wordt één primaire ouder gekozen zodat nodes nooit op dezelfde positie eindigen.
+- **DAG → boom**: als een node meerdere ouders heeft (DAG-structuur), wordt één primaire ouder gekozen zodat nodes nooit op dezelfde positie eindigen.
 - **Crossing minimization**: volgorde van kinderen per niveau wordt geoptimaliseerd via het barycenter-algoritme (3 passes) om kabelkruisingen te minimaliseren.
-- **Per-edge handles**: elke kabel krijgt een eigen aansluitpunt op de node, uitgelijn met de kindernode eronder.
-- **Cross-zone kabels**: kabels die verschillende zones verbinden worden links op de bronnode geplaatst (buiten het subtree-gebied) en lopen via gestaggerde horizontale busbanen (`midYOverride`) zodat parallelle kabels visueel gescheiden zijn.
+- **Per-edge handles**: elke kabel krijgt een eigen aansluitpunt op de node, gepositioneerd op basis van de canvas-coördinaat van de tegenoverliggende node.
+- **Uniforme routing**: alle kabels (binnen en tussen zones) worden gelijk behandeld. Parallelle kabels vanuit dezelfde bronnode krijgen gestaggerde horizontale busbanen zodat ze visueel gescheiden zijn.
 
 ### Schematische edges
 
