@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hw
+      POSTGRES_PASSWORD: hw
+      POSTGRES_DB: hw_engineering
+    ports:
+      - "5436:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports:
+      - "8004:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://hw:hw@db:5432/hw_engineering
+      ETIM_DB_PATH: /data/ETIM.db
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+      - ./data/ETIM.db:/data/ETIM.db:ro
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5176:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  pgdata:
